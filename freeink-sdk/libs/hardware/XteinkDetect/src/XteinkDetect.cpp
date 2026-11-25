@@ -430,11 +430,12 @@ EpdIcModel detect_ic_model() {
     return EpdIcModel::SSD1677;
   }
 
-  // Ensure EPD power rail is active so the controller can respond
+  // Ensure EPD power rail is active so the controller can respond (release deep-sleep pad hold first!)
   if (d.powerEnable >= 0) {
+    gpio_hold_dis(static_cast<gpio_num_t>(d.powerEnable));
     pinMode(d.powerEnable, OUTPUT);
     digitalWrite(d.powerEnable, HIGH);
-    delay(10);
+    delay(20);
   }
 
   pinMode(p.cs, OUTPUT);
@@ -475,15 +476,10 @@ EpdIcModel detect_ic_model() {
 bool applyXteinkDisplayController() {
 #if FREEINK_DEVICE_STICKY
   if (BoardConfig::isSticky()) {
-    const EpdIcModel model = detect_ic_model();
-    if (model == EpdIcModel::SSD2677) {
-      BoardConfig::ACTIVE.displayController = BoardConfig::DisplayController::SSD2677;
-      g_probeDiag.promoted = true;
-      if (Serial) Serial.printf("[%lu] [XTDET] Sticky: SSD2677 auto-detected and selected\n", millis());
-      return true;
-    }
+    // Sticky shares SCLK(13)/MOSI(14) between SD and EPD; Storage.begin() has
+    // already attached hardware SPI to those pins, so bit-banging them here
+    // detaches them from FSPI and breaks subsequent SPI.begin()/display.begin().
     BoardConfig::ACTIVE.displayController = BoardConfig::DisplayController::SSD1677;
-    if (Serial) Serial.printf("[%lu] [XTDET] Sticky: SSD1677 active (default)\n", millis());
     return false;
   }
 #endif

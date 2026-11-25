@@ -527,16 +527,22 @@ void setupDisplayAndFonts(bool seamless = false) {
   static bool controllerResolved = false;
   if (!controllerResolved) {
     controllerResolved = true;
+    LOG_INF("MAIN", "S1: applyXteinkDisplayController");
     if (freeink::applyXteinkDisplayController()) {
-      LOG_DBG("MAIN", "Panel controller: UltraChip UC81xx variant detected");
+      LOG_INF("MAIN", "Panel controller promoted (ctrl=%d)", static_cast<int>(BoardConfig::ACTIVE.displayController));
+    } else {
+      LOG_INF("MAIN", "Panel controller default (ctrl=%d)", static_cast<int>(BoardConfig::ACTIVE.displayController));
     }
   }
 #endif
 
+  LOG_INF("MAIN", "S2: display.begin(%d)", seamless ? 1 : 0);
   display.begin(seamless);
+  LOG_INF("MAIN", "S3: renderer.begin");
   renderer.begin();
+  LOG_INF("MAIN", "S4: activityManager.begin");
   activityManager.begin();
-  LOG_DBG("MAIN", "Display initialized");
+  LOG_INF("MAIN", "S5: fontDecompressor.init");
 
   // Initialize font decompressor for compressed reader fonts
   if (!fontDecompressor.init()) {
@@ -554,12 +560,14 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
+  LOG_INF("MAIN", "S6: toybox::ensureFonts");
   toybox::ensureFonts(renderer);
 
   // Discover and load SD card fonts
+  LOG_INF("MAIN", "S7: sdFontSystem.begin");
   sdFontSystem.begin(renderer);
 
-  LOG_DBG("MAIN", "Fonts setup");
+  LOG_INF("MAIN", "S8: Fonts setup done");
 }
 
 void setup() {
@@ -766,15 +774,17 @@ void setup() {
 #endif
   Frontlight.begin(SETTINGS.frontlightBrightness, SETTINGS.frontlightWarmth, /*on=*/false);
 
+  LOG_INF("MAIN", "BOOT wakeup=%d usb=%d hold=%d wakeMode=%d", static_cast<int>(wakeupReason),
+          gpio.isUsbConnected() ? 1 : 0, wakeHoldVerified ? 1 : 0, static_cast<int>(SETTINGS.powerWakeMode));
+
   switch (wakeupReason) {
     case HalGPIO::WakeupReason::PowerButton:
-#if CROSSPOINT_DEV_SERIAL_BRIDGE
-      // A bridge-driven desk device has no finger to hold the button through
-      // the wake check, and boards without USB detect (Sticky) classify every
-      // cold boot as PowerButton -- so a dev build would deep-sleep on every
-      // reset before the bridge could speak. Dev builds boot straight
-      // through; release builds keep the real gate.
-      LOG_DBG("MAIN", "Dev bridge build: skipping power button verification");
+#if CROSSPOINT_DEV_SERIAL_BRIDGE || FREEINK_DEVICE_STICKY
+      // Sticky has no digital USB-detect pin, so USB resets/flashes can read as
+      // PowerButton when the battery is full; boot straight into UI rather than
+      // looping back into deep sleep.
+      LOG_INF("MAIN", "Sticky/dev boot: skipping power button hold gate");
+      wakePowerReleasePending = true;
       break;
 #else
       if (!powermenu::acceptsWake(static_cast<powermenu::WakeMode>(SETTINGS.powerWakeMode), wakeHoldVerified)) {
@@ -802,7 +812,7 @@ void setup() {
       // Most devices return to sleep after a USB-powered cold boot.
       LOG_DBG("MAIN", "Wakeup reason: After USB Power");
 #if FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_EEGO_A4 || \
-    FREEINK_DEVICE_METALIO_EINK4
+    FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_STICKY
       // X4 Pro must stay awake so USB Serial/JTAG remains available after leaving
       // USB Drive and reconnecting the cable. Paper Mono has no armable GPIO wake
       // (its button is behind the PMIC). Metalio also needs native USB available
@@ -867,6 +877,7 @@ void setup() {
   bool needsWakeRefresh = false;
 
   setupDisplayAndFonts(resume != BootResume::Splash);
+  LOG_INF("MAIN", "Display & fonts ready (resume=%d)", static_cast<int>(resume));
 
   switch (resume) {
     case BootResume::Silent:
