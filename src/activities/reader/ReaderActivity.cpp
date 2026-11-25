@@ -359,19 +359,24 @@ void ReaderActivity::loop() {
   const auto touch = ReaderUtils::detectTouchPageTurn(
       renderer, mappedInput, false, SETTINGS.xtcInvertPageDirection && FsHelpers::hasXtcExtension(bookPath));
   auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
-  prevTriggered = prevTriggered || touch.prev;
-  nextTriggered = nextTriggered || touch.next;
+  applyPageTurn(prevTriggered || touch.prev, nextTriggered || touch.next, touch.prev || touch.next, touch.heldMs,
+                fromTilt);
+}
+
+// Also replays the XTC reader's delayed single taps (held back to detect a double tap).
+void ReaderActivity::applyPageTurn(const bool prevTriggered, const bool nextTriggered, const bool fromTouch,
+                                   const unsigned long touchHeldMs, const bool fromTilt) {
   if (!prevTriggered && !nextTriggered) return;
   if (handleEndOfBookPageTurn(prevTriggered, nextTriggered)) return;
 
-  const unsigned long heldMs = (touch.prev || touch.next) ? touch.heldMs : mappedInput.getHeldTime();
+  const unsigned long heldMs = fromTouch ? touchHeldMs : mappedInput.getHeldTime();
   const bool skip =
       !fromTilt && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP && heldMs >= ReaderUtils::SKIP_HOLD_MS;
 
   const bool changed = skip ? skipPages(prevTriggered ? -10 : 10) : pageTurn(!prevTriggered);
   // A skip is navigation, not reading: it never counts toward session dwell.
   notePageTurn(!skip && !prevTriggered, changed);
-  if (changed && (touch.prev || touch.next)) haptic_feedback::touchAction(skip);
+  if (changed && fromTouch) haptic_feedback::touchAction(skip);
   requestUpdate();
 }
 

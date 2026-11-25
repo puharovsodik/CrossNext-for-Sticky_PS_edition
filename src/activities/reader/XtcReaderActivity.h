@@ -7,6 +7,7 @@
 
 #include "ReaderActivity.h"
 #include "ReaderToolbarUi.h"
+#include "XtcPageView.h"
 
 class XtcReaderActivity final : public ReaderActivity {
   std::shared_ptr<Xtc> xtc;
@@ -16,6 +17,15 @@ class XtcReaderActivity final : public ReaderActivity {
   ReaderToolbarUi::Model overlayModel;
   int settingsTab = 0, settingsPage = 0;
   void renderPageSettings();
+
+  // Double-tap zoom: a 2x window into the page, panned by swipes. Any page change ends it.
+  uint32_t zoomPage = UINT32_MAX;
+  int zoomX = 0, zoomY = 0;    // top-left source pixel of the zoomed window
+  xtcview::View fitView;       // unzoomed layout of the last rendered page; maps taps to source pixels
+  bool tapPending = false;     // a single tap held back until the double-tap window closes
+  unsigned long pendingTapAt = 0, pendingTapHeldMs = 0;
+  int pendingTapX = 0;
+  bool handleZoomInput();
 
   enum class StatusBarOverlayPosition { Bottom, Top };
   struct StatusBarInfo {

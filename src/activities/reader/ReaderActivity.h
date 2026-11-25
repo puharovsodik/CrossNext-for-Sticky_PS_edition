@@ -89,6 +89,8 @@ class ReaderActivity : public Activity {
   void clearEndOfBookOptionsIfNeeded();
   void disableFastInitialRefresh();
   void notePageTurn(bool forward, bool succeeded);
+  void applyPageTurn(bool prevTriggered, bool nextTriggered, bool fromTouch, unsigned long touchHeldMs,
+                     bool fromTilt);
   bool flushReaderSession();
   void requestFinishBook();
   void recordEndOfBook();

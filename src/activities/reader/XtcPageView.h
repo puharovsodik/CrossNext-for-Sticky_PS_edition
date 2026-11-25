@@ -7,9 +7,23 @@ namespace xtcview {
 struct View {
   int x = 0, y = 0, width = 0, height = 0;
   int sourceWidth = 0, sourceHeight = 0;
-  int sourceX(int dx) const { return width > 1 ? int(int64_t(dx) * (sourceWidth - 1) / (width - 1)) : 0; }
-  int sourceY(int dy) const { return height > 1 ? int(int64_t(dy) * (sourceHeight - 1) / (height - 1)) : 0; }
+  int originX = 0, originY = 0, scale = 1;  // zoomed window into the source (see zoom())
+  int sourceX(int dx) const {
+    return originX + (width > 1 ? int(int64_t(dx) * (sourceWidth - 1) / (width - 1)) : 0) / scale;
+  }
+  int sourceY(int dy) const {
+    return originY + (height > 1 ? int(int64_t(dy) * (sourceHeight - 1) / (height - 1)) : 0) / scale;
+  }
 };
+// 2x window into a fitted page. Clamps the requested top-left source pixel in place so the window stays on the page.
+inline View zoom(View view, int& originX, int& originY) {
+  originX = std::clamp(originX, 0, view.sourceWidth - (view.sourceWidth + 1) / 2);
+  originY = std::clamp(originY, 0, view.sourceHeight - (view.sourceHeight + 1) / 2);
+  view.originX = originX;
+  view.originY = originY;
+  view.scale = 2;
+  return view;
+}
 // Preserve the complete page and leave the status overlay outside its viewport.
 inline View fit(int sourceWidth, int sourceHeight, int screenWidth, int screenHeight, int top, int right, int bottom,
                 int left) {

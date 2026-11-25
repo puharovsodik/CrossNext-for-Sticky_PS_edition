@@ -1,6 +1,7 @@
 #include <HalStorage.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -65,6 +66,19 @@ int main() {
           const int sx = view.sourceX(x), sy = view.sourceY(y);
           CHECK(xtcview::pixel(data.data(), width, height, depth, sx, sy) == (sx + sy) % (depth == 2 ? 4 : 2));
         }
+    }
+  }
+  // Zoom: a 2x window that stays on the page for any requested origin, odd sizes and hi-res sources included.
+  for (const auto& [sw, sh, screenW, screenH] : {std::array{480, 800, 480, 772}, std::array{481, 799, 480, 800},
+                                                 std::array{960, 1600, 480, 800}, std::array{17, 29, 40, 40}}) {
+    const auto fitted = xtcview::fit(sw, sh, screenW, screenH, 0, 0, 0, 0);
+    for (int request : {-1000, 0, 7, 100000}) {
+      int ox = request, oy = request;
+      const auto view = xtcview::zoom(fitted, ox, oy);
+      CHECK(ox >= 0 && oy >= 0 && view.originX == ox && view.originY == oy);
+      CHECK(view.sourceX(0) == ox && view.sourceY(0) == oy);
+      CHECK(view.sourceX(view.width - 1) < sw && view.sourceY(view.height - 1) < sh);
+      CHECK(view.sourceX(view.width - 1) - ox == (sw - 1) / 2);  // exactly half the page is visible
     }
   }
 

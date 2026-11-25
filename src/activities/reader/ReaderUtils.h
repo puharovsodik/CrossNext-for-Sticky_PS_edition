@@ -92,6 +92,22 @@ struct TouchPageTurn {
   unsigned long heldMs;
 };
 
+// Page-turn meaning of a screen tap at x. Also used by the XTC reader to replay a delayed tap.
+inline TouchPageTurn tapPageTurn(const GfxRenderer& renderer, const int x, const bool rtlBook,
+                                 const bool invertDirection) {
+  TouchPageTurn result{false, false, 0};
+  if (!SETTINGS.touchReaderControls) return result;
+  const int width = renderer.getScreenWidth();
+  // RTL books and Inverted Tap each reverse the shared zones.
+  const bool inverted =
+      (SETTINGS.pageTurnGesture == CrossPointSettings::INVERTED_TAP ||
+       SETTINGS.previousPageGesture == CrossPointSettings::INVERTED_TAP) != (rtlBook != invertDirection);
+  const bool nextZone = inverted ? x < (width * 2) / 3 : x >= width / 3;
+  result.next = nextZone && gestureAllowsTap(SETTINGS.pageTurnGesture);
+  result.prev = !nextZone && gestureAllowsTap(SETTINGS.previousPageGesture);
+  return result;
+}
+
 inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const MappedInputManager& input,
                                          const bool rtlBook = false, const bool invertDirection = false) {
   TouchPageTurn result{false, false, 0};
@@ -122,15 +138,7 @@ inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const Mapp
   if (!input.wasScreenTapped(x, y)) {
     return result;
   }
-
-  const int width = renderer.getScreenWidth();
-  // RTL books and Inverted Tap each reverse the shared zones.
-  const bool inverted =
-      (SETTINGS.pageTurnGesture == CrossPointSettings::INVERTED_TAP ||
-       SETTINGS.previousPageGesture == CrossPointSettings::INVERTED_TAP) != (rtlBook != invertDirection);
-  const bool nextZone = inverted ? x < (width * 2) / 3 : x >= width / 3;
-  result.next = nextZone && nextTaps;
-  result.prev = !nextZone && prevTaps;
+  result = tapPageTurn(renderer, x, rtlBook, invertDirection);
   result.heldMs = gpio.lastTouchHeldMs();
   return result;
 }

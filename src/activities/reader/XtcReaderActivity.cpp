@@ -217,6 +217,8 @@ bool XtcReaderActivity::handleFormatInput() {
     return true;
   }
 
+  if (!isAtEndOfBook() && handleZoomInput()) return true;
+
   // Enter text settings (CrossNext menu) on Confirm release or touch menu gesture
   const bool touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || touchMenu) {
@@ -225,6 +227,59 @@ bool XtcReaderActivity::handleFormatInput() {
     return true;
   }
   return false;
+}
+
+bool XtcReaderActivity::handleZoomInput() {
+  // Every single tap waits this long for a second one, so page-turn taps are delayed by it.
+  static constexpr unsigned long DOUBLE_TAP_MS = 300;
+  const unsigned long now = millis();
+  if (tapPending && now - pendingTapAt > DOUBLE_TAP_MS) {
+    tapPending = false;
+    const auto turn = ReaderUtils::tapPageTurn(renderer, pendingTapX, false,
+                                               SETTINGS.xtcInvertPageDirection && FsHelpers::hasXtcExtension(bookPath));
+    applyPageTurn(turn.prev, turn.next, true, pendingTapHeldMs, false);
+  }
+
+  int x = 0, y = 0;
+  if (mappedInput.wasScreenTapped(x, y)) {
+    if (!tapPending) {
+      tapPending = true;
+      pendingTapAt = now;
+      pendingTapX = x;
+      pendingTapHeldMs = gpio.lastTouchHeldMs();
+      return true;
+    }
+    tapPending = false;
+    RenderLock lock;
+    if (zoomPage == currentPage) {
+      zoomPage = UINT32_MAX;
+    } else {
+      // Centre the 2x window (half the page each way) on the tapped source pixel.
+      zoomPage = currentPage;
+      zoomX = fitView.sourceX(std::clamp(x - fitView.x, 0, std::max(0, fitView.width - 1))) - fitView.sourceWidth / 4;
+      zoomY = fitView.sourceY(std::clamp(y - fitView.y, 0, std::max(0, fitView.height - 1))) - fitView.sourceHeight / 4;
+    }
+    requestUpdate();
+    return true;
+  }
+
+  if (zoomPage != currentPage) return false;
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    RenderLock lock;
+    zoomPage = UINT32_MAX;
+    requestUpdate();
+    return true;
+  }
+  int sx = 0, sy = 0, ex = 0, ey = 0;
+  if (!mappedInput.decodeSwipe(sx, sy, ex, ey)) return false;
+  RenderLock lock;
+  // The page follows the finger: at 2x, one screen pixel is half a fitted pixel.
+  const int oldX = zoomX, oldY = zoomY;
+  zoomX -= int(int64_t(ex - sx) * fitView.sourceWidth / std::max(1, 2 * fitView.width));
+  zoomY -= int(int64_t(ey - sy) * fitView.sourceHeight / std::max(1, 2 * fitView.height));
+  xtcview::zoom(fitView, zoomX, zoomY);
+  if (zoomX != oldX || zoomY != oldY) requestUpdate();
+  return true;
 }
 
 void XtcReaderActivity::applyInitialOrientation() { ReaderActivity::applyInitialOrientation(); }
@@ -356,8 +411,10 @@ void XtcReaderActivity::renderPage() {
       if (placement == CrossPointSettings::XTC_STATUS_BAR_BOTTOM) bottom += statusHeight + 4;
     }
   }
-  const auto view = xtcview::fit(pageWidth, pageHeight, renderer.getScreenWidth(), renderer.getScreenHeight(), top,
-                                 right, bottom, left);
+  fitView = xtcview::fit(pageWidth, pageHeight, renderer.getScreenWidth(), renderer.getScreenHeight(), top, right,
+                         bottom, left);
+  if (zoomPage != currentPage) zoomPage = UINT32_MAX;  // leaving the page ends zoom, so returning shows it whole
+  const auto view =zoomPage == currentPage ? xtcview::zoom(fitView, zoomX, zoomY) : fitView;
   auto getPixelValue = [&](int x, int y) {
     return xtcview::pixel(pageBuffer.get(), pageWidth, pageHeight, bitDepth, view.sourceX(x), view.sourceY(y));
   };
