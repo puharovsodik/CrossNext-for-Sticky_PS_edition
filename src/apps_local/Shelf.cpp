@@ -89,6 +89,7 @@ constexpr shelf::Item kApps[] = {
     {"WALLPAPERS", &icon_wallpapers_32, &WallpapersActivity::create},
     {"QUOTES", &icon_library_32, &QuotesActivity::create},
     {"FLASHCARDS", &extra_cards_32, &FlashcardsActivity::create},
+    {"STUDY", &icon_study_32, &StudyActivity::create},
     {"WORDS", &icon_library_32, &WordsActivity::create},
     {"CALENDAR", &extra_calendar_32, &ToolsActivity::calendar},
     {"CLOCK", &extra_clock_32, &ToolsActivity::clock},
@@ -355,6 +356,7 @@ const char* label(const char* stableTitle) {
   if (std::strcmp(stableTitle, "READING QUEST") == 0) return tr(STR_UI_READING_QUEST_6AD39C);
   if (std::strcmp(stableTitle, "PET") == 0) return tr(STR_PET_APP);
   if (std::strcmp(stableTitle, "FLASHCARDS") == 0) return tr(STR_UI_FLASHCARDS_E0439E);
+  if (std::strcmp(stableTitle, "STUDY") == 0) return tr(STR_UI_STUDY_8DC71F);
   if (std::strcmp(stableTitle, "CARNIVORO") == 0) return tr(STR_CAR_TITLE);
   if (std::strcmp(stableTitle, "WORDS") == 0) return tr(STR_WORDS_APP);
   if (std::strcmp(stableTitle, "QUOTES") == 0) return tr(STR_UI_QUOTES_171E81);
