@@ -179,7 +179,7 @@ void importing(toybox::Screen& s, const ImportModel& m) {
 int libraryCapacity(const fui::DeviceContext& device) {
   const auto b = pixelui::geometry(device).body;
   const bool wide = b.width > b.height;
-  const int available = b.height - (wide ? 60 + 32 + 10 : 90 + 52 + 160);
+  const int available = b.height - (wide ? 60 + 32 + 10 : 90 + 52 + 220);
   return std::clamp((available + (wide ? 4 : 6)) / (wide ? 54 : 66), 1, kMaxLibraryRows);
 }
 void library(toybox::Screen& s, const LibraryModel& m) {
@@ -216,13 +216,14 @@ void library(toybox::Screen& s, const LibraryModel& m) {
     dashboard::chevron(s.target(), makeRect(r.right() - 34, r.y, 26, r.height), selected);
     s.frame().hit(r, OpenDeck, n, fui::InputTouch);
   }
-  const int pagerTop = wide ? b.bottom() - 32 : b.bottom() - 204;
+  const int pagerTop = wide ? b.bottom() - 32 : b.bottom() - 264;
   if (m.pages > 1) paging(s, makeRect(b.x, pagerTop, w, wide ? 32 : 44), m.page, m.pages);
   const int x = wide ? b.x + w + 18 : b.x;
-  const int groupH = 148, y = wide ? b.y + (b.height - groupH) / 2 : b.bottom() - groupH;
+  const int groupH = 208, y = wide ? b.y + (b.height - groupH) / 2 : b.bottom() - groupH;
   section(s, makeRect(x, y, w, 28), tr(STR_FLASH_NAVIGATION));
   row(s, makeRect(x, y + 36, w, 50), tr(STR_FLASH_HISTORY), nullptr, extra_calendar_32, History);
   row(s, makeRect(x, y + 96, w, 50), tr(STR_FLASH_HELP), nullptr, extra_reading_book_32, Help);
+  row(s, makeRect(x, y + 156, w, 50), tr(STR_FLASH_COMPUTER_SYNC), nullptr, icon_refresh_cw_32, ComputerSync);
 }
 void deck(toybox::Screen& s, const studyui::DeckModel& m) {
   const auto b = begin(s, tr(STR_FLASHCARDS_APP));

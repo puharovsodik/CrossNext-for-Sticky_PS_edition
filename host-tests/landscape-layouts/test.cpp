@@ -635,7 +635,7 @@ int main(int argc, char** argv) {
           rows[n] = {n % 2 ? "Languages" : "General science", 120, 10, 4, n % 2 == 0, n % 2 != 0};
         flashui::LibraryModel model;
         model.count = flashui::libraryCapacity(decks.device);
-        CHECK(model.count >= (wide ? 5 : 6));
+        CHECK(model.count >= 5);
         model.rows = rows;
         model.pages = 4;
         model.totalDecks = 17;

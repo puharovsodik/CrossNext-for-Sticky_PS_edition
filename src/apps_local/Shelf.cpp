@@ -33,7 +33,6 @@
 #include "minesweeper/MinesweeperActivity.h"
 #include "murdle/MurdleActivity.h"
 #include "notes/NotesActivity.h"
-#include "pet/PetActivity.h"
 #include "picross/PicrossActivity.h"
 #include "player/PlayerActivity.h"
 #include "pocketgames/PocketGamesActivity.h"
@@ -42,7 +41,6 @@
 #include "quest/ReadingQuestActivity.h"
 #include "quotes/QuotesActivity.h"
 #include "solitaire/SolitaireActivity.h"
-#include "study/StudyActivity.h"
 #include "sudoku/SudokuActivity.h"
 #include "tools/ToolsActivity.h"
 #include "toybattle/ToyBattleActivity.h"
@@ -51,7 +49,6 @@
 #include "voicenotes/VoiceNotesActivity.h"
 #include "wallpapers/WallpapersActivity.h"
 #include "wikipedia/WikipediaActivity.h"
-#include "wordle/WordleActivity.h"
 #include "words/WordsActivity.h"
 #include "xkcd/XkcdActivity.h"
 
@@ -66,7 +63,6 @@ constexpr shelf::Item kGames[] = {
     {"GO", &icon_go_32, &GoActivity::create},
     {"MINESWEEPER", &icon_minesweeper_32, &MinesweeperActivity::create},
     {"PICROSS", &icon_picross_32, &PicrossActivity::create},
-    {"WORDLE", &icon_wordle_32, &WordleActivity::create},
     {"2048", &icon_connections_32, &Game2048Activity::create},
     {"THE INTERCEPT", &icon_underhand_32, &InterceptActivity::create},
     {"BATTLESHIP", &icon_battleship_32, &BattleshipActivity::create},
@@ -80,7 +76,6 @@ constexpr shelf::Item kGames[] = {
 };
 constexpr shelf::Item kApps[] = {
     {"READING QUEST", &icon_dungeon_32, &ReadingQuestActivity::create},
-    {"PET", &icon_cat_animals_32, &PetActivity::create},
     {"HABITS", &icon_tick_24, &HabitsActivity::create},
     {"TO DO LIST", &icon_murdle_face_clues_32, &NotesActivity::createTodo},
     {"NOTES", &extra_notes_32, &NotesActivity::create},
@@ -89,7 +84,6 @@ constexpr shelf::Item kApps[] = {
     {"WALLPAPERS", &icon_wallpapers_32, &WallpapersActivity::create},
     {"QUOTES", &icon_library_32, &QuotesActivity::create},
     {"FLASHCARDS", &extra_cards_32, &FlashcardsActivity::create},
-    {"STUDY", &icon_study_32, &StudyActivity::create},
     {"WORDS", &icon_library_32, &WordsActivity::create},
     {"CALENDAR", &extra_calendar_32, &ToolsActivity::calendar},
     {"CLOCK", &extra_clock_32, &ToolsActivity::clock},
@@ -354,9 +348,7 @@ const char* label(const char* stableTitle) {
   if (std::strcmp(stableTitle, "FOREHEAD") == 0) return tr(STR_UI_FOREHEAD_82AFB5);
   if (std::strcmp(stableTitle, "THE INTERCEPT") == 0) return tr(STR_INTERCEPT_NAME);
   if (std::strcmp(stableTitle, "READING QUEST") == 0) return tr(STR_UI_READING_QUEST_6AD39C);
-  if (std::strcmp(stableTitle, "PET") == 0) return tr(STR_PET_APP);
   if (std::strcmp(stableTitle, "FLASHCARDS") == 0) return tr(STR_UI_FLASHCARDS_E0439E);
-  if (std::strcmp(stableTitle, "STUDY") == 0) return tr(STR_UI_STUDY_8DC71F);
   if (std::strcmp(stableTitle, "CARNIVORO") == 0) return tr(STR_CAR_TITLE);
   if (std::strcmp(stableTitle, "WORDS") == 0) return tr(STR_WORDS_APP);
   if (std::strcmp(stableTitle, "QUOTES") == 0) return tr(STR_UI_QUOTES_171E81);

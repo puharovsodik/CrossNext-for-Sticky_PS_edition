@@ -74,6 +74,19 @@ void FlashcardsActivity::scan() {
     }
     entries.push_back(std::move(item));
   }
+  // The top level also lists decks converted on a computer into /study (the Study sync folder),
+  // so one app reaches both. Only complete decks are shown; they open in place and keep syncing.
+  if (path == "/FLASHCARDS" || path == "/flashcards") {
+    HalFile study = Storage.open("/study");
+    for (auto file = study ? study.openNextFile() : HalFile(); file && entries.size() < 128;
+         file = study.openNextFile()) {
+      file.getName(buffer, sizeof(buffer));
+      if (!buffer[0] || buffer[0] == '.' || !file.isDirectory()) continue;
+      flashcards::DeckInfo item;
+      item.source = std::string("/study/") + buffer;
+      if (catalog.describe(item.source.c_str(), item)) entries.push_back(std::move(item));
+    }
+  }
   std::sort(entries.begin(), entries.end(), [](const flashcards::DeckInfo& a, const flashcards::DeckInfo& b) {
     if (a.folder != b.folder) return a.folder > b.folder;
     return FsHelpers::naturalLess(a.name, b.name);
@@ -239,6 +252,11 @@ bool FlashcardsActivity::handleCustomInput() {
       onBackButton();
     else if (event.action == flashui::ViewSession)
       openDeck(cache);
+    else if (event.action == flashui::ComputerSync) {
+      // The full Study screen: pairing, sync and deck choice for the computer-converted decks in /study.
+      auto child = StudyActivity::create(renderer, mappedInput);
+      if (child) startActivityForResult(std::move(child), [this](const ActivityResult&) { scan(); });
+    }
   }
   const int swipe = interactions.routable() ? sidebuttons::swipeStep(mappedInput) : 0;
   if ((view == View::Browse || view == View::Help) &&

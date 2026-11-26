@@ -1,5 +1,6 @@
 #include "PomodoroActivity.h"
 
+#include <HalBuzzer.h>
 #include <I18n.h>
 #include <Memory.h>
 
@@ -7,6 +8,7 @@
 
 #include "../Shelf.h"
 #include "../ui/PixelMenuTheme.h"
+#include "CrossPointSettings.h"
 #include "components/SideButtonNavigation.h"
 #include "util/LoopDeadline.h"
 std::unique_ptr<Activity> PomodoroActivity::create(GfxRenderer& renderer, MappedInputManager& input) {
@@ -134,6 +136,13 @@ void PomodoroActivity::loop() {
     const bool complete = pomodoro::advance(state, now - lastTick);
     dirty = true;
     if (complete) {
+      // Phase end: 3x beep-beep, deliberately ignoring the keySound mute. Blocks ~2 s (tone() delays).
+      for (int n = 0; n < 3; ++n) {
+        HalBuzzer::beep(2500, 120, SETTINGS.buzzerVolume);
+        delay(120);
+        HalBuzzer::beep(2500, 120, SETTINGS.buzzerVolume);
+        if (n < 2) delay(500);
+      }
       ++viewRevision;
       pendingTap.clear();
       stagePage = state.stage / 3;

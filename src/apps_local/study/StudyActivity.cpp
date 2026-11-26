@@ -17,7 +17,6 @@
 #include "../../components/HeaderBackTapTarget.h"
 #include "../../components/UITheme.h"
 #include "../../util/QrUtils.h"
-#include "../Shelf.h"
 #include "../flashcards/FlashHistoryActivity.h"
 #include "../flashcards/FlashScreens.h"
 #include "../flashcards/FlashSettingsActivity.h"
@@ -1034,10 +1033,8 @@ void StudyActivity::loop() {
       requestUpdate();
       return;
     }
-    if (installedOnly_)
-      finish();
-    else
-      shelf::leave(renderer, mappedInput);
+    // Study is opened only from Flashcards now (deck or "Sync with computer"), so Back returns there.
+    finish();
     return;
   }
   if (syncQueued_) {
