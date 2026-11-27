@@ -12,7 +12,6 @@ inline fui::Rect begin(toybox::Screen& s, const char* title, int actionReserve =
   const int h = safe.y + 56;
   chrome::headerHeight = h;
   const auto bgPaint = chrome::lightHeader ? dashboard::paper : dashboard::ink;
-  const auto fgPaint = chrome::lightHeader ? dashboard::ink : dashboard::paper;
   const auto fgColor = chrome::lightHeader ? fui::Color::Black : fui::Color::White;
 
   s.target().fill(fui::makeRect(0, 0, s.device().width, h), bgPaint);
