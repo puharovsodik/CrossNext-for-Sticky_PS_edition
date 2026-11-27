@@ -15,8 +15,19 @@
 #include "ReaderUtils.h"
 #include "XtcPageView.h"
 #include "XtcReaderChapterSelectionActivity.h"
+#include "XtcScroll.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+
+namespace {
+// Pages may be written straight into the panel framebuffer only when no strip mode or clip rect needs drawPixel.
+bool directFrameBuffer(const GfxRenderer& renderer) {
+  uint8_t* const fb = renderer.getFrameBuffer();
+  const auto clip = renderer.getClipRect();
+  return fb && renderer.getWriteTarget() == fb && clip[0] <= 0 && clip[1] <= 0 &&
+         clip[0] + clip[2] >= renderer.getScreenWidth() && clip[1] + clip[3] >= renderer.getScreenHeight();
+}
+}  // namespace
 
 void XtcReaderActivity::openTextSettings() {
   if (!xtc || isAtEndOfBook() || pageSettings) return;
@@ -97,7 +108,7 @@ void XtcReaderActivity::openChapterSelection() {
                              if (!result.isCancelled) {
                                RenderLock lock;
                                rememberContentsPosition({0, origin});
-                               currentPage = std::get<PageResult>(result.data).page;
+                               jumpToPage(std::get<PageResult>(result.data).page);
                                requestUpdate();
                              }
                            });
@@ -180,7 +191,7 @@ bool XtcReaderActivity::handleFormatInput() {
           const int n = control - readertext::ChapterPick;
           if (n < int(xtc->getChapters().size())) {
             rememberContentsPosition({0, currentPage});
-            currentPage = xtc->getChapters()[n].startPage;
+            jumpToPage(xtc->getChapters()[n].startPage);
             pageSettings.reset();
             requestUpdate();
           }
@@ -217,7 +228,11 @@ bool XtcReaderActivity::handleFormatInput() {
     return true;
   }
 
-  if (!isAtEndOfBook() && handleZoomInput()) return true;
+  if (!isAtEndOfBook()) {
+    int scrollTop = 0, scrollHeight = 0;
+    if (scrollLayout(scrollTop, scrollHeight) ? handleScrollInput(scrollTop, scrollHeight) : handleZoomInput())
+      return true;
+  }
 
   // Enter text settings (CrossNext menu) on Confirm release or touch menu gesture
   const bool touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
@@ -230,8 +245,6 @@ bool XtcReaderActivity::handleFormatInput() {
 }
 
 bool XtcReaderActivity::handleZoomInput() {
-  // Every single tap waits this long for a second one, so page-turn taps are delayed by it.
-  static constexpr unsigned long DOUBLE_TAP_MS = 300;
   const unsigned long now = millis();
   if (tapPending && now - pendingTapAt > DOUBLE_TAP_MS) {
     tapPending = false;
@@ -279,6 +292,94 @@ bool XtcReaderActivity::handleZoomInput() {
   zoomY -= int(int64_t(ey - sy) * fitView.sourceHeight / std::max(1, 2 * fitView.height));
   xtcview::zoom(fitView, zoomX, zoomY);
   if (zoomX != oldX || zoomY != oldY) requestUpdate();
+  return true;
+}
+
+// Scroll mode. At 1x a vertical drag scrolls at once by its own travel (faster flicks go further), a sideways swipe falls
+// through to the normal swipe page turn, and a tap waits DOUBLE_TAP_MS: alone it steps 80% like the normal tap handler
+// (pageTurn), doubled it zooms 2x on the tapped point. At 2x a drag in any direction pans 1:1, a single tap does
+// nothing, and a double tap or Back returns to 1x.
+bool XtcReaderActivity::handleScrollInput(const int top, const int viewHeight) {
+  static constexpr int TAP_SLOP_PX = 28;  // InputManager's TOUCH_TAP_SLOP_PX, which is private
+  const unsigned long now = millis();
+  if (tapPending && now - pendingTapAt > DOUBLE_TAP_MS) {
+    tapPending = false;
+    if (!scrollZoomed) {
+      const auto turn = ReaderUtils::tapPageTurn(
+          renderer, pendingTapX, false, SETTINGS.xtcInvertPageDirection && FsHelpers::hasXtcExtension(bookPath));
+      applyPageTurn(turn.prev, turn.next, true, pendingTapHeldMs, false);
+    }
+  }
+  // An edge swipe also reads as Back; at 2x it is a pan, so only a real Back leaves zoom.
+  if (scrollZoomed && !mappedInput.wasBackGesture() && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    {
+      RenderLock lock;
+      toggleScrollZoom(0, 0, viewHeight);
+    }
+    requestUpdate();
+    return true;
+  }
+
+  int x = 0, y = 0;
+  // Only a touch-down seen here starts a drag, so a contact begun or ended under a global edge gesture is ignored.
+  if (mappedInput.wasScreenTouchPressed(x, y)) {
+    dragging = true;
+    dragStartX = dragLastX = x;
+    dragStartY = dragLastY = y;
+  }
+  if (dragging && mappedInput.isScreenTouchHeld(x, y)) {
+    dragLastX = x;
+    dragLastY = y;
+    return false;
+  }
+  // The release edge lasts one frame; a release consumed elsewhere just drops the drag. A fast flick can lift before
+  // its last held sample is seen, so the swipe's own end points (and start, if the touch-down was missed) win.
+  const bool releaseEdge = mappedInput.wasScreenTouchReleased();
+  int sx = 0, sy = 0, ex = 0, ey = 0;
+  const bool swipe = mappedInput.decodeSwipe(sx, sy, ex, ey);  // only ever true on a release frame
+  if (swipe) {
+    if (!dragging) dragStartX = sx, dragStartY = sy;
+    dragLastX = ex;
+    dragLastY = ey;
+  }
+  const bool released = (releaseEdge && dragging) || swipe;
+  dragging = false;
+  const int dx = dragLastX - dragStartX, dy = dragLastY - dragStartY;
+  if (released && (scrollZoomed ? xtcscroll::isPanDrag(dx, dy, TAP_SLOP_PX)
+                                : xtcscroll::isScrollDrag(dx, dy, TAP_SLOP_PX))) {
+    tapPending = false;  // a tap just before the drag must not also turn the page
+    const uint32_t topPage = currentPage;
+    bool changed;
+    {
+      RenderLock lock;
+      if (scrollZoomed) {
+        const auto zoom = xtcscroll::pan({scrollZoomX, scrollZoomY}, dx, dy, scrollStrip(viewHeight));
+        changed = setScrollZoom(zoom.x, zoom.y, viewHeight);
+      } else {
+        const int travel = -dy;  // finger up moves the content up, so y grows
+        changed = scrollBy(int64_t(travel * xtcscroll::flickMultiplier(travel, gpio.lastTouchHeldMs())), viewHeight);
+      }
+    }
+    if (currentPage != topPage) notePageTurn(currentPage > topPage, true);  // stats count pages, not scroll steps
+    if (changed) requestUpdate();
+    return true;  // consumes the release so the swipe and tap handlers do not also act on it
+  }
+
+  // At 2x every other release is swallowed too, so a sideways swipe never reaches the swipe page turn.
+  if (!mappedInput.wasScreenTapped(x, y)) return scrollZoomed && releaseEdge;
+  if (!tapPending) {
+    tapPending = true;
+    pendingTapAt = now;
+    pendingTapX = x;
+    pendingTapHeldMs = gpio.lastTouchHeldMs();
+    return true;
+  }
+  tapPending = false;
+  {
+    RenderLock lock;
+    toggleScrollZoom(x, std::clamp(y - top, 0, viewHeight - 1), viewHeight);
+  }
+  requestUpdate();
   return true;
 }
 
@@ -368,7 +469,152 @@ void XtcReaderActivity::renderStatusBarOverlay(GfxRenderer& renderer, const Stat
   GUI.drawStatusBar(renderer, progress, pageInfo.currentPage, pageInfo.pageCount, pageInfo.title, paddingBottom);
 }
 
+void XtcReaderActivity::pageInsets(int& top, int& right, int& bottom, int& left) const {
+  renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
+  if (xtc->getBitDepth() == 1) {
+    const int statusHeight = UITheme::getInstance().getStatusBarHeight();
+    if (statusHeight > 0) {
+      const auto placement = SETTINGS.statusBarSpec().xtcMode;
+      if (placement == CrossPointSettings::XTC_STATUS_BAR_TOP) top += statusHeight + 4;
+      if (placement == CrossPointSettings::XTC_STATUS_BAR_BOTTOM) bottom += statusHeight + 4;
+    }
+  }
+}
+
+// Continuous scroll is on for a 1-bit book read in landscape whose pages are exactly the screen width but taller than
+// the room left for them (webtoon strips): they are shown 1:1 as one long strip instead of shrunk to fit. Every other
+// book and orientation keeps the fitted page and its double-tap zoom.
+bool XtcReaderActivity::scrollLayout(int& top, int& viewHeight) const {
+  if (!xtc || xtc->getBitDepth() != 1) return false;
+  const auto orientation = renderer.getOrientation();
+  if (orientation != GfxRenderer::LandscapeClockwise && orientation != GfxRenderer::LandscapeCounterClockwise)
+    return false;
+  if (renderer.getScreenWidth() != xtc->getPageWidth()) return false;
+  int right, bottom, left;
+  pageInsets(top, right, bottom, left);
+  viewHeight = renderer.getScreenHeight() - top - bottom;
+  return viewHeight > 0 && xtc->getPageHeight() > viewHeight;
+}
+
+// Moves the scroll offset by delta rows, first following any jump made by page (chapters, skips, reopening), and keeps
+// currentPage on the page holding the top row.
+bool XtcReaderActivity::scrollBy(const int64_t delta, const int viewHeight) {
+  const int pageHeight = xtc->getPageHeight();
+  if (scrollY / pageHeight != currentPage) scrollY = int64_t(currentPage) * pageHeight;
+  const int64_t old = scrollY;
+  scrollY = xtcscroll::clampY(scrollY + delta, xtc->getPageCount(), pageHeight, viewHeight);
+  currentPage = uint32_t(scrollY / pageHeight);
+  return scrollY != old;
+}
+
+xtcscroll::Strip XtcReaderActivity::scrollStrip(const int viewHeight) const {
+  return {xtc->getPageWidth(), xtc->getPageHeight(), xtc->getPageCount(), renderer.getScreenWidth(), viewHeight};
+}
+
+// Moves the 2x window (clamped and rounded) and keeps the 1x offset, which progress saves, and currentPage on its top
+// row.
+bool XtcReaderActivity::setScrollZoom(const int64_t x, const int64_t y, const int viewHeight) {
+  const auto strip = scrollStrip(viewHeight);
+  const auto zoom = xtcscroll::clampZoom(x, y, strip);
+  const bool changed = zoom.x != scrollZoomX || zoom.y != scrollZoomY;
+  scrollZoomX = zoom.x;
+  scrollZoomY = zoom.y;
+  scrollY = xtcscroll::clampY(zoom.y, strip.pageCount, strip.pageHeight, viewHeight);
+  currentPage = uint32_t(zoom.y / strip.pageHeight);
+  return changed;
+}
+
+// Double tap: 2x centred on the tapped point of the 1x strip, or back to 1x centred on the zoom window.
+void XtcReaderActivity::toggleScrollZoom(const int x, const int viewRow, const int viewHeight) {
+  tapPending = false;  // a held-back single tap must not turn the page after the zoom changes
+  const auto strip = scrollStrip(viewHeight);
+  if (scrollZoomed) {
+    scrollZoomed = false;
+    scrollY = xtcscroll::unzoomY(scrollZoomY, strip);
+    currentPage = uint32_t(scrollY / strip.pageHeight);
+    return;
+  }
+  scrollBy(0, viewHeight);  // follow any page jump before mapping the tap
+  const auto zoom = xtcscroll::zoomAt(x, viewRow, scrollY, strip);
+  scrollZoomed = true;
+  setScrollZoom(zoom.x, zoom.y, viewHeight);
+}
+
+// Decoded page from the two-slot cache, loading it over the slot that does not hold `keep`.
+const uint8_t* XtcReaderActivity::scrollPage(const uint32_t page, const uint32_t keep) {
+  for (auto& slot : scrollPages)
+    if (slot.page == page) return slot.data.get();
+  auto& slot = scrollPages[0].page == keep ? scrollPages[1] : scrollPages[0];
+  const size_t size = size_t((xtc->getPageWidth() + 7) / 8) * xtc->getPageHeight();
+  if (!slot.data) slot.data = makeUniqueNoThrow<uint8_t[]>(size);
+  slot.page = UINT32_MAX;
+  if (!slot.data) {
+    LOG_ERR("XTR", "Failed to allocate scroll page buffer (%lu bytes)", size);
+    return nullptr;
+  }
+  if (xtc->loadPage(page, slot.data.get(), size) != size) {  // a short page would leave stale rows in a reused slot
+    LOG_ERR("XTR", "Failed to load page %lu: error=%s", page, xtc::errorToString(xtc->getLastError()));
+    return nullptr;
+  }
+  slot.page = page;
+  return slot.data.get();
+}
+
+void XtcReaderActivity::renderScroll(const int top, const int viewHeight) {
+  const int pageWidth = xtc->getPageWidth(), pageHeight = xtc->getPageHeight();
+  scrollBy(0, viewHeight);
+  if (scrollZoomed) setScrollZoom(scrollZoomX, scrollZoomY, viewHeight);  // re-clamp if the view height changed
+  const int64_t y = scrollZoomed ? scrollZoomY : scrollY;
+  const int zoomX = scrollZoomed ? scrollZoomX : 0, shift = scrollZoomed ? 1 : 0;  // 2x: source = zoom + screen / 2
+  const int rows = scrollZoomed ? xtcscroll::zoomRows(viewHeight) : viewHeight;
+  const uint32_t first = uint32_t(y / pageHeight);
+  const bool spans = y % pageHeight + rows > pageHeight;
+  const uint8_t* pages[2] = {scrollPage(first, spans ? first + 1 : UINT32_MAX), nullptr};
+  if (spans) pages[1] = scrollPage(first + 1, first);
+  if (!pages[0] || (spans && !pages[1])) {
+    renderer.clearScreen();
+    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+    renderer.displayBuffer();
+    return;
+  }
+
+  renderer.clearScreen();
+  if (directFrameBuffer(renderer) && pageWidth == renderer.getDisplayWidthBytes() * 8) {
+    const bool rotated180 = renderer.getOrientation() == GfxRenderer::LandscapeClockwise;
+    if (scrollZoomed)
+      xtcscroll::blitZoomRows(pages, pageHeight, zoomX, y, viewHeight, top, renderer.getFrameBuffer(),
+                              renderer.getDisplayWidthBytes(), renderer.getDisplayHeight(), rotated180);
+    else
+      xtcscroll::blitRows(pages, pageHeight, y, viewHeight, top, renderer.getFrameBuffer(),
+                          renderer.getDisplayWidthBytes(), renderer.getDisplayHeight(), rotated180);
+  } else {
+    for (int r = 0; r < viewHeight; ++r) {
+      const auto [page, row] = xtcscroll::sourceRow(y, r >> shift, pageHeight);
+      for (int x = 0; x < pageWidth; ++x) {
+        if (xtcview::pixel(pages[page - first], pageWidth, pageHeight, 1, zoomX + (x >> shift), row))
+          renderer.drawPixel(x, top + r, true);
+      }
+    }
+  }
+
+  renderStatusBarOverlay(renderer, SETTINGS.statusBarSpec().xtcMode == CrossPointSettings::XTC_STATUS_BAR_TOP
+                                       ? StatusBarOverlayPosition::Top
+                                       : StatusBarOverlayPosition::Bottom);
+  renderContentsReturn();
+  ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+  LOG_DBG("XTR", "Rendered scroll row %lu (page %lu/%lu)", uint32_t(y), currentPage + 1, xtc->getPageCount());
+  markPageRendered();
+}
+
 void XtcReaderActivity::renderPage() {
+  int scrollTop = 0, scrollHeight = 0;
+  if (scrollLayout(scrollTop, scrollHeight)) {
+    renderScroll(scrollTop, scrollHeight);
+    return;
+  }
+  for (auto& slot : scrollPages) slot = {};
+  scrollZoomed = false;
+
   const uint16_t pageWidth = xtc->getPageWidth();
   const uint16_t pageHeight = xtc->getPageHeight();
   const uint8_t bitDepth = xtc->getBitDepth();
@@ -402,15 +648,7 @@ void XtcReaderActivity::renderPage() {
   renderer.clearScreen();
 
   int top, right, bottom, left;
-  renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
-  if (bitDepth == 1) {
-    const int statusHeight = UITheme::getInstance().getStatusBarHeight();
-    if (statusHeight > 0) {
-      const auto placement = SETTINGS.statusBarSpec().xtcMode;
-      if (placement == CrossPointSettings::XTC_STATUS_BAR_TOP) top += statusHeight + 4;
-      if (placement == CrossPointSettings::XTC_STATUS_BAR_BOTTOM) bottom += statusHeight + 4;
-    }
-  }
+  pageInsets(top, right, bottom, left);
   fitView = xtcview::fit(pageWidth, pageHeight, renderer.getScreenWidth(), renderer.getScreenHeight(), top, right,
                          bottom, left);
   if (zoomPage != currentPage) zoomPage = UINT32_MAX;  // leaving the page ends zoom, so returning shows it whole
@@ -488,9 +726,17 @@ void XtcReaderActivity::renderPage() {
     markPageRendered();
     return;
   } else {
-    for (int y = 0; y < view.height; ++y) {
-      for (int x = 0; x < view.width; ++x) {
-        if (getPixelValue(x, y)) renderer.drawPixel(view.x + x, view.y + y, true);
+    // The per-pixel drawPixel loop took ~510 ms per page on device; blit1 writes the framebuffer bytes directly
+    // when no strip mode or clip rect needs drawPixel's handling.
+    static_assert(GfxRenderer::Portrait == 0 && GfxRenderer::LandscapeClockwise == 1 &&
+                  GfxRenderer::PortraitInverted == 2 && GfxRenderer::LandscapeCounterClockwise == 3);
+    if (!directFrameBuffer(renderer) ||
+        !xtcview::blit1(pageBuffer.get(), pageWidth, view, renderer.getFrameBuffer(), renderer.getDisplayWidth(),
+                        renderer.getDisplayHeight(), renderer.getDisplayWidthBytes(), renderer.getOrientation())) {
+      for (int y = 0; y < view.height; ++y) {
+        for (int x = 0; x < view.width; ++x) {
+          if (getPixelValue(x, y)) renderer.drawPixel(view.x + x, view.y + y, true);
+        }
       }
     }
   }
@@ -508,10 +754,31 @@ void XtcReaderActivity::renderPage() {
   markPageRendered();
 }
 
-void XtcReaderActivity::restoreContentsPosition(ContentsPosition position) { currentPage = position.page; }
+void XtcReaderActivity::restoreContentsPosition(ContentsPosition position) { jumpToPage(position.page); }
+
+// An explicit page jump starts at the top of that page, even when it is the page already on screen.
+void XtcReaderActivity::jumpToPage(const uint32_t page) {
+  scrollZoomed = false;
+  currentPage = page;
+  scrollY = int64_t(page) * xtc->getPageHeight();
+}
 
 bool XtcReaderActivity::pageTurn(bool isForward) {
   if (!xtc) return false;
+  int scrollTop = 0, scrollHeight = 0;
+  if (currentPage < xtc->getPageCount() && scrollLayout(scrollTop, scrollHeight)) {
+    // Continuous scroll steps 80% of the view; a step past the last screen opens the end-of-book screen as before.
+    // While zoomed it steps 80% of the zoom window and stays zoomed.
+    RenderLock lock;
+    const int step = xtcscroll::step(scrollZoomed ? xtcscroll::zoomRows(scrollHeight) : scrollHeight);
+    if (scrollZoomed ? setScrollZoom(scrollZoomX, scrollZoomY + (isForward ? step : -step), scrollHeight)
+                     : scrollBy(isForward ? step : -step, scrollHeight))
+      return true;
+    if (!isForward) return false;
+    scrollZoomed = false;
+    currentPage = xtc->getPageCount();
+    return true;
+  }
   if (isForward) {
     if (currentPage < xtc->getPageCount()) {
       currentPage++;
@@ -528,11 +795,12 @@ bool XtcReaderActivity::pageTurn(bool isForward) {
 
 bool XtcReaderActivity::skipPages(int amount) {
   if (!xtc) return false;
+  RenderLock lock;
   int newPage = static_cast<int>(currentPage) + amount;
   if (newPage < 0) newPage = 0;
   if (newPage > static_cast<int>(xtc->getPageCount())) newPage = static_cast<int>(xtc->getPageCount());
   if (newPage != static_cast<int>(currentPage)) {
-    currentPage = static_cast<uint32_t>(newPage);
+    jumpToPage(static_cast<uint32_t>(newPage));
     return true;
   }
   return false;
@@ -547,11 +815,13 @@ bool XtcReaderActivity::saveFinishedPosition() {
   for (int n = 0; n < 4; ++n) data[n] = static_cast<uint8_t>(page >> (8 * n));
   if (!ProgressFile::writeAtomic(xtc->getCachePath(), data, sizeof(data))) return false;
   currentPage = lastSavedPage = page;
+  scrollZoomed = false;
   pageSettings.reset();
   return true;
 }
 
 void XtcReaderActivity::onReturnFromEndOfBook() {
+  scrollZoomed = false;
   if (xtc && xtc->getPageCount() > 0) {
     currentPage = xtc->getPageCount() - 1;
   } else {
@@ -559,7 +829,24 @@ void XtcReaderActivity::onReturnFromEndOfBook() {
   }
 }
 
+// Scroll mode keeps the row within the page in a sidecar, scroll.bin = {page, row} (LE u32 each), next to
+// progress.bin. progress.bin stays the 4-byte page every other reader of it expects; the row is used only while the
+// sidecar's page matches it, so a stale sidecar (finish, reset, sync) is ignored.
 void XtcReaderActivity::saveProgress() const {
+  int scrollTop = 0, scrollHeight = 0;
+  if (xtc && currentPage < xtc->getPageCount() && scrollLayout(scrollTop, scrollHeight) &&
+      scrollY / xtc->getPageHeight() == currentPage) {
+    const uint32_t row = uint32_t(scrollY % xtc->getPageHeight());
+    if (currentPage != lastSavedScrollPage || row != lastSavedScrollRow) {
+      uint8_t data[8];
+      for (int n = 0; n < 4; ++n) data[n] = uint8_t(currentPage >> (8 * n)), data[4 + n] = uint8_t(row >> (8 * n));
+      HalFile f;
+      if (Storage.openFileForWrite("XTC", xtc->getCachePath() + "/scroll.bin", f) && f.write(data, 8) == 8) {
+        lastSavedScrollPage = currentPage;
+        lastSavedScrollRow = row;
+      }
+    }
+  }
   if (!xtc || currentPage == lastSavedPage) return;
   uint8_t data[4];
   data[0] = currentPage & 0xFF;
@@ -583,6 +870,16 @@ void XtcReaderActivity::loadProgress() {
         currentPage = xtc->getPageCount() - 1;
       }
       LOG_DBG("XTC", "Loaded progress: page %lu/%lu", currentPage + 1, xtc->getPageCount());
+    }
+  }
+  scrollY = int64_t(currentPage) * xtc->getPageHeight();
+  HalFile scroll;
+  if (Storage.openFileForRead("XTC", xtc->getCachePath() + "/scroll.bin", scroll)) {
+    uint8_t data[8];
+    if (scroll.read(data, 8) == 8) {
+      const uint32_t page = data[0] | (data[1] << 8) | (data[2] << 16) | (uint32_t(data[3]) << 24);
+      const uint32_t row = data[4] | (data[5] << 8) | (data[6] << 16) | (uint32_t(data[7]) << 24);
+      if (page == currentPage && row < xtc->getPageHeight()) scrollY += row;
     }
   }
 }

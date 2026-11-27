@@ -8,6 +8,7 @@
 #include "ReaderActivity.h"
 #include "ReaderToolbarUi.h"
 #include "XtcPageView.h"
+#include "XtcScroll.h"
 
 class XtcReaderActivity final : public ReaderActivity {
   std::shared_ptr<Xtc> xtc;
@@ -22,10 +23,37 @@ class XtcReaderActivity final : public ReaderActivity {
   uint32_t zoomPage = UINT32_MAX;
   int zoomX = 0, zoomY = 0;    // top-left source pixel of the zoomed window
   xtcview::View fitView;       // unzoomed layout of the last rendered page; maps taps to source pixels
+  // Every single tap waits this long for a second one, so page-turn taps are delayed by it.
+  static constexpr unsigned long DOUBLE_TAP_MS = 300;
   bool tapPending = false;     // a single tap held back until the double-tap window closes
   unsigned long pendingTapAt = 0, pendingTapHeldMs = 0;
   int pendingTapX = 0;
   bool handleZoomInput();
+
+  // Continuous scroll (see scrollLayout): scrollY is the global source row on the top screen row.
+  int64_t scrollY = 0;
+  mutable uint32_t lastSavedScrollPage = UINT32_MAX, lastSavedScrollRow = 0;
+  bool dragging = false;  // a finger is down; scroll input tracks its vertical travel itself
+  int dragStartX = 0, dragStartY = 0, dragLastX = 0, dragLastY = 0;
+  struct ScrollPage {
+    uint32_t page = UINT32_MAX;
+    std::unique_ptr<uint8_t[]> data;
+  };
+  ScrollPage scrollPages[2];  // a screen spans at most two pages, since pages are taller than it
+  // Double-tap 2x zoom inside the strip (xtcscroll::Zoom): left source column and top global source row.
+  bool scrollZoomed = false;
+  int scrollZoomX = 0;
+  int64_t scrollZoomY = 0;
+  xtcscroll::Strip scrollStrip(int viewHeight) const;
+  bool setScrollZoom(int64_t x, int64_t y, int viewHeight);
+  void toggleScrollZoom(int x, int viewRow, int viewHeight);
+  void pageInsets(int& top, int& right, int& bottom, int& left) const;
+  bool scrollLayout(int& top, int& viewHeight) const;
+  bool scrollBy(int64_t delta, int viewHeight);
+  const uint8_t* scrollPage(uint32_t page, uint32_t keep);
+  void renderScroll(int top, int viewHeight);
+  bool handleScrollInput(int top, int viewHeight);
+  void jumpToPage(uint32_t page);
 
   enum class StatusBarOverlayPosition { Bottom, Top };
   struct StatusBarInfo {

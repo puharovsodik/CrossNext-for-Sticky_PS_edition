@@ -8,6 +8,7 @@
 
 #include "../../src/activities/reader/ReaderSession.h"
 #include "../../src/activities/reader/XtcPageView.h"
+#include "../../src/activities/reader/XtcScroll.h"
 #include "../../src/apps_local/game2048/Game2048Store.h"
 #include "../../src/apps_local/home/HomeMenuCore.h"
 #include "../../src/apps_local/home/HomeMenuStore.h"
@@ -79,6 +80,167 @@ int main() {
       CHECK(view.sourceX(0) == ox && view.sourceY(0) == oy);
       CHECK(view.sourceX(view.width - 1) < sw && view.sourceY(view.height - 1) < sh);
       CHECK(view.sourceX(view.width - 1) - ox == (sw - 1) / 2);  // exactly half the page is visible
+    }
+  }
+  // blit1 matches the per-pixel drawPixel loop bit for bit and leaves every other framebuffer bit alone.
+  {
+    constexpr int panelW = 800, panelH = 480, stride = panelW / 8;
+    uint32_t seed = 12345;
+    auto next = [&] {
+      seed = seed * 1664525u + 1013904223u;
+      return uint8_t(seed >> 24);
+    };
+    for (const auto& [sw, sh] : {std::array{17, 29}, std::array{481, 799}, std::array{480, 800}, std::array{963, 1601},
+                                 std::array{1203, 517}}) {
+      std::vector<uint8_t> src(size_t((sw + 7) / 8) * sh);
+      for (auto& b : src) b = next();
+      for (int orientation = 0; orientation < 4; ++orientation) {
+        const int screenW = orientation % 2 ? panelW : panelH, screenH = orientation % 2 ? panelH : panelW;
+        const auto fitted = xtcview::fit(sw, sh, screenW, screenH, 13, 5, 31, 9);
+        for (int request : {-1, 0, 3, 77, 100000}) {
+          int ox = request, oy = request / 3;
+          const auto view = request < 0 ? fitted : xtcview::zoom(fitted, ox, oy);
+          std::vector<uint8_t> fb(stride * panelH);
+          for (auto& b : fb) b = next();
+          auto expected = fb;
+          for (int y = 0; y < view.height; ++y)
+            for (int x = 0; x < view.width; ++x) {
+              if (!xtcview::pixel(src.data(), sw, sh, 1, view.sourceX(x), view.sourceY(y))) continue;
+              const int lx = view.x + x, ly = view.y + y;
+              int px = lx, py = ly;  // GfxRenderer::rotateCoordinates + drawPixel bounds check
+              if (orientation == 0) px = ly, py = panelH - 1 - lx;
+              if (orientation == 1) px = panelW - 1 - lx, py = panelH - 1 - ly;
+              if (orientation == 2) px = panelW - 1 - ly, py = lx;
+              if (px < 0 || px >= panelW || py < 0 || py >= panelH) continue;
+              expected[py * stride + px / 8] &= ~(1 << (7 - px % 8));
+            }
+          CHECK(xtcview::blit1(src.data(), sw, view, fb.data(), panelW, panelH, stride, orientation));
+          CHECK(fb == expected);
+        }
+      }
+    }
+  }
+  // Continuous scroll: clamping, page stitching, flick curve, button step, and the row blit in both landscapes.
+  {
+    CHECK(xtcscroll::clampY(-5, 3, 1200, 452) == 0);
+    CHECK(xtcscroll::clampY(1000, 3, 1200, 452) == 1000);
+    CHECK(xtcscroll::clampY(1 << 30, 3, 1200, 452) == 3 * 1200 - 452);
+    CHECK(xtcscroll::clampY(50, 1, 300, 452) == 0);  // shorter than the view: stays at the top
+    // Across a page boundary: the last rows of page N, then the first rows of N + 1.
+    for (int r = 0; r < 4; ++r) {
+      const auto at = xtcscroll::sourceRow(5 * 1200 - 2, r, 1200);
+      CHECK(at.page == uint32_t(r < 2 ? 4 : 5) && at.row == (r < 2 ? 1198 + r : r - 2));
+    }
+    // Last page, partial view: the final screen shows the bottom 452 rows of page 2 and nothing past it.
+    const int64_t last = xtcscroll::clampY(INT64_MAX / 2, 3, 1200, 452);
+    CHECK(xtcscroll::sourceRow(last, 0, 1200).page == 2 && xtcscroll::sourceRow(last, 0, 1200).row == 748);
+    CHECK(xtcscroll::sourceRow(last, 451, 1200).page == 2 && xtcscroll::sourceRow(last, 451, 1200).row == 1199);
+    CHECK(xtcscroll::flickMultiplier(100, 1000) == 1.0f);   // 0.1 px/ms
+    CHECK(xtcscroll::flickMultiplier(-100, 200) == 1.0f);   // 0.5 px/ms, either direction
+    CHECK(xtcscroll::flickMultiplier(125, 100) == 2.0f);    // 1.25 px/ms, halfway
+    CHECK(xtcscroll::flickMultiplier(200, 100) == 3.0f);    // 2 px/ms
+    CHECK(xtcscroll::flickMultiplier(-900, 100) == 3.0f);   // capped
+    CHECK(xtcscroll::flickMultiplier(300, 0) == 3.0f);      // zero duration is finite
+    CHECK(xtcscroll::flickMultiplier(0, 0) == 1.0f);
+    CHECK(xtcscroll::isScrollDrag(0, 28, 28) && xtcscroll::isScrollDrag(-20, -40, 28));
+    CHECK(!xtcscroll::isScrollDrag(0, 27, 28) && !xtcscroll::isScrollDrag(0, -27, 28));  // a tap
+    CHECK(!xtcscroll::isScrollDrag(120, 40, 28) && !xtcscroll::isScrollDrag(-60, 60, 28));  // sideways or diagonal swipe
+    CHECK(xtcscroll::isPanDrag(28, 0, 28) && xtcscroll::isPanDrag(0, -28, 28) && xtcscroll::isPanDrag(-60, 59, 28));
+    CHECK(!xtcscroll::isPanDrag(27, -27, 28) && !xtcscroll::isPanDrag(0, 0, 28));  // a tap at 2x
+    CHECK(xtcscroll::step(480) == 384 && xtcscroll::step(452) == 361);
+    CHECK(xtcscroll::reversedBits[0x01] == 0x80 && xtcscroll::reversedBits[0xC4] == 0x23);
+
+    constexpr int panelW = 800, panelH = 480, stride = panelW / 8, pageH = 600, pages = 3;
+    uint32_t seed = 777;
+    auto next = [&] {
+      seed = seed * 1664525u + 1013904223u;
+      return uint8_t(seed >> 24);
+    };
+    std::vector<uint8_t> book(size_t(stride) * pageH * pages);  // pages back to back: global row g is row g of this
+    for (auto& b : book) b = next();
+    for (int orientation : {1, 3}) {
+      for (const auto& [top, viewH] : {std::array{0, 480}, std::array{28, 424}, std::array{0, 452}}) {
+        for (int64_t y : {int64_t(0), int64_t(10), int64_t(pageH - 1), int64_t(pageH - viewH), int64_t(pageH + 77),
+                          int64_t(pages * pageH - viewH)}) {
+          y = xtcscroll::clampY(y, pages, pageH, viewH);
+          const uint32_t first = uint32_t(y / pageH);
+          const uint8_t* src[2] = {book.data() + size_t(first) * stride * pageH,
+                                   first + 1 < uint32_t(pages) ? book.data() + size_t(first + 1) * stride * pageH : nullptr};
+          std::vector<uint8_t> fb(stride * panelH);
+          for (auto& b : fb) b = next();
+          auto expected = fb;
+          for (int r = 0; r < viewH; ++r) {  // clearScreen on the view rows, then drawPixel for every black pixel
+            const int ly = top + r;
+            for (int x = 0; x < panelW; ++x) {
+              const bool black = !((book[size_t(y + r) * stride + x / 8] >> (7 - x % 8)) & 1);
+              int px = x, py = ly;  // GfxRenderer::rotateCoordinates
+              if (orientation == 1) px = panelW - 1 - x, py = panelH - 1 - ly;
+              uint8_t& byte = expected[py * stride + px / 8];
+              byte = black ? byte & ~(1 << (7 - px % 8)) : byte | (1 << (7 - px % 8));
+            }
+          }
+          xtcscroll::blitRows(src, pageH, y, viewH, top, fb.data(), stride, panelH, orientation == 1);
+          CHECK(fb == expected);
+        }
+      }
+    }
+
+    // 2x zoom inside the strip: a 400 x 226 source window for an 800 x 452 view over three 1200-row pages.
+    const xtcscroll::Strip strip{800, 1200, 3, 800, 452};
+    auto zoomIs = [](xtcscroll::Zoom z, int x, int64_t y) { return z.x == x && z.y == y; };
+    CHECK(zoomIs(xtcscroll::clampZoom(-10, -1, strip), 0, 0));
+    CHECK(zoomIs(xtcscroll::clampZoom(1, 1199, strip), 0, 1199));     // rounds to 4 px; may span pages 0 and 1
+    CHECK(zoomIs(xtcscroll::clampZoom(2, 1200, strip), 4, 1200));
+    CHECK(zoomIs(xtcscroll::clampZoom(397, 2000, strip), 396, 2000));
+    CHECK(zoomIs(xtcscroll::clampZoom(399, 1 << 30, strip), 400, 3600 - 226));  // right edge, last page
+    CHECK(zoomIs(xtcscroll::clampZoom(5000, 3375, strip), 400, 3374));
+    CHECK(xtcscroll::clampZoom(0, 1 << 30, {800, 1200, 3, 800, 451}).y == 3600 - 226);  // odd view rounds rows up
+    // Centre on the tap: the tapped strip point lands mid-window, clamped at the edges.
+    CHECK(zoomIs(xtcscroll::zoomAt(400, 226, 1000, strip), 200, 1113));
+    CHECK(zoomIs(xtcscroll::zoomAt(0, 0, 0, strip), 0, 0));
+    CHECK(zoomIs(xtcscroll::zoomAt(799, 451, 3148, strip), 400, 3374));
+    CHECK(zoomIs(xtcscroll::zoomAt(330, 100, 1150, strip), 132, 1137));  // 130 rounds to 132
+    // Pan follows the finger 1:1 on screen, half that in source px, and stops at the edges.
+    CHECK(zoomIs(xtcscroll::pan({200, 1113}, 40, -60, strip), 180, 1143));
+    CHECK(zoomIs(xtcscroll::pan({200, 1113}, -40, 60, strip), 220, 1083));
+    CHECK(zoomIs(xtcscroll::pan({4, 10}, 100, 100, strip), 0, 0));
+    CHECK(zoomIs(xtcscroll::pan({396, 3370}, -100, -100, strip), 400, 3374));
+    // Leaving zoom centres the 1x view on the window: the inverse of zoomAt for a centre tap, clamped at both ends.
+    CHECK(xtcscroll::unzoomY(xtcscroll::zoomAt(400, 226, 1000, strip).y, strip) == 1000);
+    CHECK(xtcscroll::unzoomY(0, strip) == 0);
+    CHECK(xtcscroll::unzoomY(3374, strip) == 3600 - 452);
+    CHECK(xtcscroll::doubledNibble[0x0] == 0x00 && xtcscroll::doubledNibble[0xF] == 0xFF &&
+          xtcscroll::doubledNibble[0x9] == 0xC3 && xtcscroll::doubledNibble[0x4] == 0x30);
+    // 2x blit against the per-pixel model: screen (x, r) = source (zoomX + x / 2, zoomY + r / 2), rotated like
+    // GfxRenderer::rotateCoordinates; the rows outside the view keep their random bytes.
+    for (int orientation : {1, 3}) {
+      for (const auto& [top, viewH] : {std::array{0, 480}, std::array{28, 424}, std::array{0, 451}}) {
+        const xtcscroll::Strip s{panelW, pageH, pages, panelW, viewH};
+        for (const auto& [x0, y0] : {std::array{0, 0}, std::array{4, 599}, std::array{200, 450},
+                                     std::array{401, 1000}, std::array{800, pages * pageH}}) {
+          const auto zoom = xtcscroll::clampZoom(x0, y0, s);
+          const uint32_t first = uint32_t(zoom.y / pageH);
+          const uint8_t* src[2] = {book.data() + size_t(first) * stride * pageH,
+                                   first + 1 < uint32_t(pages) ? book.data() + size_t(first + 1) * stride * pageH
+                                                               : nullptr};
+          std::vector<uint8_t> fb(stride * panelH);
+          for (auto& b : fb) b = next();
+          auto expected = fb;
+          for (int r = 0; r < viewH; ++r) {
+            const int ly = top + r;
+            for (int x = 0; x < panelW; ++x) {
+              const int sx = zoom.x + x / 2;
+              const bool black = !((book[size_t(zoom.y + r / 2) * stride + sx / 8] >> (7 - sx % 8)) & 1);
+              int px = x, py = ly;
+              if (orientation == 1) px = panelW - 1 - x, py = panelH - 1 - ly;
+              uint8_t& byte = expected[py * stride + px / 8];
+              byte = black ? byte & ~(1 << (7 - px % 8)) : byte | (1 << (7 - px % 8));
+            }
+          }
+          xtcscroll::blitZoomRows(src, pageH, zoom.x, zoom.y, viewH, top, fb.data(), stride, panelH, orientation == 1);
+          CHECK(fb == expected);
+        }
+      }
     }
   }
 
