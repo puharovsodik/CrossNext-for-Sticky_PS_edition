@@ -81,7 +81,7 @@ inline int fontRowsPerPage(const freeink::ui::DeviceContext& device) {
 }
 inline int sheetRowsPerPage(const freeink::ui::DeviceContext& device, bool fixed = false, int tab = 2) {
   if (tab == 3 && !fixed) return chrome::lightHeader ? 5 : 6;
-  return device.width > device.height ? (tab == 2 ? 4 : 2) : (tab == 2 ? 4 : 5);
+  return device.width > device.height ? 4 : (tab == 2 ? 4 : 5);
 }
 template <typename Screen>
 void build(Screen& screen, const Model& model, Work& work);

@@ -4383,6 +4383,7 @@ STR_HOME_SHORTCUT_TARGET: "Destino del atajo"
 
 STR_XTC_INVERT_DIRECTION: "Invertir dirección XTC/XTCH"
 STR_XTC_INVERT_DIRECTION_HELP: "Invierte los deslizamientos y las zonas táctiles de página en XTC/XTCH."
+STR_XTC_DOUBLE_TAP_ZOOM: "Zoom con doble toque"
 STR_FLASH_TEXT_SETTINGS: "Texto de flashcards"
 STR_FLASH_QUESTION_SIZE: "Tamaño de pregunta"
 STR_FLASH_ANSWER_SIZE: "Tamaño de respuesta"

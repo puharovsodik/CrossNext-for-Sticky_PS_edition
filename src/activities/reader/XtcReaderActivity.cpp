@@ -16,6 +16,7 @@
 #include "XtcPageView.h"
 #include "XtcReaderChapterSelectionActivity.h"
 #include "XtcScroll.h"
+#include "apps_local/ui/Rotation.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -58,13 +59,15 @@ void XtcReaderActivity::renderPageSettings() {
   text.contentsAvailable = !xtc->getChapters().empty();
   text.listContext = this;
   text.listPage = settingsPage;
-  text.listCount = settingsTab == 2 ? xtc->getChapters().size() : 2;
+  text.listCount = settingsTab == 2 ? xtc->getChapters().size() : 4;
   text.listLabel = [](const void* context, int n, char* out, size_t size) {
     const auto* self = static_cast<const XtcReaderActivity*>(context);
     std::snprintf(out, size, "%s",
                   self->settingsTab == 2 ? self->xtc->getChapters()[n].name.c_str()
                   : n == 0               ? tr(STR_REFRESH_FREQ)
-                                         : I18N.get(self->completionMenuLabelId()));
+                  : n == 1               ? I18N.get(self->completionMenuLabelId())
+                  : n == 2               ? tr(STR_ORIENTATION)
+                                         : tr(STR_XTC_DOUBLE_TAP_ZOOM));
   };
   text.listCheck = [](const void* context, int n) {
     const auto* self = static_cast<const XtcReaderActivity*>(context);
@@ -73,8 +76,16 @@ void XtcReaderActivity::renderPageSettings() {
     return -1;
   };
   text.listValue = [](const void* context, int n, char* out, size_t size) {
+    static constexpr StrId orientations[] = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW,
+                                             StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW};
+    static_assert(std::size(orientations) == CrossPointSettings::ORIENTATION_COUNT, "orientation labels");
     const auto* self = static_cast<const XtcReaderActivity*>(context);
-    if (self->settingsTab == 3 && n == 0) std::snprintf(out, size, "%s", self->overlayModel.text.refresh);
+    if (self->settingsTab != 3) return;
+    if (n == 0) std::snprintf(out, size, "%s", self->overlayModel.text.refresh);
+    if (n == 2)
+      std::snprintf(out, size, "%s",
+                    I18N.get(orientations[SETTINGS.orientation % CrossPointSettings::ORIENTATION_COUNT]));
+    if (n == 3) std::snprintf(out, size, "%s", SETTINGS.xtcDoubleTapZoom ? tr(STR_STATE_ON) : tr(STR_STATE_OFF));
   };
   text.placement = I18N.get(positions[SETTINGS.xtcStatusBarMode % 3]);
   text.refresh = I18N.get(refresh[SETTINGS.refreshFrequency % CrossPointSettings::REFRESH_FREQUENCY_COUNT]);
@@ -176,8 +187,9 @@ bool XtcReaderActivity::handleFormatInput() {
         RenderLock lock;
         int control = routed.value;
         if (swipeStep || control == readertext::SheetPrevious || control == readertext::SheetNext) {
-          const int count = settingsTab == 2 ? xtc->getChapters().size() : 2;
-          const int capacity = readertext::sheetRowsPerPage(pageSettings->uiTarget.deviceContext(), true);
+          const int count = overlayModel.text.listCount;  // as last rendered for this tab
+          const int capacity =
+              readertext::sheetRowsPerPage(pageSettings->uiTarget.deviceContext(), true, settingsTab);
           const int step = swipeStep ? swipeStep : (control == readertext::SheetNext ? 1 : -1);
           const int page = std::clamp(settingsPage + step, 0, std::max(0, (count - 1) / capacity));
           if (page == settingsPage) return true;
@@ -195,6 +207,28 @@ bool XtcReaderActivity::handleFormatInput() {
             pageSettings.reset();
             requestUpdate();
           }
+          return true;
+        }
+        if (settingsTab == 3 && control == readertext::MorePick + 2) {
+          // Rotate in place: the page and the open sheet are laid out again for the new screen.
+          SETTINGS.orientation = uint8_t(rotation::readerNext(SETTINGS.orientation, SETTINGS.rotationDirection != 0,
+                                                              SETTINGS.readerFourOrientations != 0));
+          SETTINGS.saveToFile();
+          ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+          zoomPage = UINT32_MAX;
+          scrollZoomed = tapPending = dragging = false;
+          pagesUntilFullRefresh = 1;  // clean the old layout's ghosting, as handleForcedRefresh does
+          settingsPage = 0;
+          pageSettings->begin();
+          requestUpdate();
+          return true;
+        }
+        if (settingsTab == 3 && control == readertext::MorePick + 3) {
+          SETTINGS.xtcDoubleTapZoom = !SETTINGS.xtcDoubleTapZoom;
+          SETTINGS.saveToFile();
+          zoomPage = UINT32_MAX;
+          scrollZoomed = tapPending = false;
+          requestUpdate();
           return true;
         }
         if (settingsTab == 3 && control >= readertext::MorePick && control < readertext::MorePick + 1)
@@ -230,7 +264,9 @@ bool XtcReaderActivity::handleFormatInput() {
 
   if (!isAtEndOfBook()) {
     int scrollTop = 0, scrollHeight = 0;
-    if (scrollLayout(scrollTop, scrollHeight) ? handleScrollInput(scrollTop, scrollHeight) : handleZoomInput())
+    // With double-tap zoom off, fitted pages skip handleZoomInput: taps turn at once, with no double-tap wait.
+    if (scrollLayout(scrollTop, scrollHeight) ? handleScrollInput(scrollTop, scrollHeight)
+                                              : SETTINGS.xtcDoubleTapZoom && handleZoomInput())
       return true;
   }
 
@@ -367,6 +403,7 @@ bool XtcReaderActivity::handleScrollInput(const int top, const int viewHeight) {
 
   // At 2x every other release is swallowed too, so a sideways swipe never reaches the swipe page turn.
   if (!mappedInput.wasScreenTapped(x, y)) return scrollZoomed && releaseEdge;
+  if (!SETTINGS.xtcDoubleTapZoom) return false;  // zoom off: the normal tap handler steps 80% at once
   if (!tapPending) {
     tapPending = true;
     pendingTapAt = now;

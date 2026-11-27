@@ -442,7 +442,7 @@ int main(int argc, char** argv) {
     model.fixed = true;
     model.statusAvailable = false;
     model.tab = 3;
-    model.listCount = 2;
+    model.listCount = 4;  // refresh, finish, orientation, double-tap zoom
     model.refresh = "NEVER";
     readertext::build(c.screen, model, work);
     c.checkHits();
@@ -450,8 +450,9 @@ int main(int argc, char** argv) {
     CHECK(!c.has(2, 1));
     CHECK(!c.has(6, readertext::Placement));
     CHECK(!c.has(6, readertext::Percentage));
-    CHECK(c.has(6, readertext::MorePick));
-    CHECK(c.has(6, readertext::MorePick + 1));
+    for (int n = 0; n < 4; ++n) CHECK(c.has(6, readertext::MorePick + n));  // all on one page, both orientations
+    CHECK(!c.has(6, readertext::SheetNext));
+    CHECK(readertext::sheetRowsPerPage(c.device, true, 3) >= 4);
   }
   for (const auto size : {std::pair<int, int>{480, 800}, {800, 480}}) {
     for (int page : {0, 1, 31}) {

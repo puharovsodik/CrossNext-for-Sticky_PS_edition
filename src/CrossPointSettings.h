@@ -440,6 +440,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t previousPageGesture = SWIPE_ONLY;
   // Swap both horizontal page swipes and tap zones for fixed-layout manga.
   uint8_t xtcInvertPageDirection = 0;
+  // Double tap zooms XTC pages 2x; off turns pages on a single tap, without the double-tap wait.
+  uint8_t xtcDoubleTapZoom = 1;
   uint8_t xtcCoverRotation = 0;
   uint8_t readingDailyGoal = 0;
   uint8_t flashcardQuestionSize = 0;

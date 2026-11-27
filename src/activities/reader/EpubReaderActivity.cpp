@@ -3509,7 +3509,7 @@ void EpubReaderActivity::applyReaderTextSettings() {
 void EpubReaderActivity::buildMoreActions() {
   using MA = EpubReaderMenuActivity::MenuAction;
   moreItems.clear();
-  moreItems.reserve(9);
+  moreItems.reserve(10);
   moreItems.push_back({MA::GO_HOME, StrId::STR_GO_HOME_BUTTON});
   moreItems.push_back({MA::STYLE_SETTINGS, StrId::STR_STYLE});
   moreItems.push_back({MA::SEARCH, StrId::STR_READER_SEARCH});
@@ -3519,6 +3519,9 @@ void EpubReaderActivity::buildMoreActions() {
   moreItems.push_back({MA::GO_TO_PERCENT, StrId::STR_READER_GOTO});
   moreItems.push_back({MA::BOOK_STATS, StrId::STR_READER_BOOK_STATS});
   moreItems.push_back({MA::FINISH_BOOK, completionMenuLabelId()});
+  // After Finish: the sheet picks icons by row position and rows past the eighth share the last (refresh) icon, so
+  // no earlier row's icon moves.
+  moreItems.push_back({MA::ROTATE_SCREEN, StrId::STR_ORIENTATION});
   if (KOREADER_STORE.hasCredentials()) moreItems.push_back({MA::SYNC, StrId::STR_SYNC_PROGRESS});
 }
 
@@ -3600,7 +3603,12 @@ void EpubReaderActivity::activateMoreRow(int row) {
     case MA::ROTATE_SCREEN: {
       applyOrientation(uint8_t(rotation::readerNext(SETTINGS.orientation, SETTINGS.rotationDirection != 0,
                                                     SETTINGS.readerFourOrientations != 0)));
-      discardOverlayPage();
+      {
+        // applyOrientation's own lock is released here; drop the old-orientation hit table and page under a new one.
+        RenderLock lock;
+        if (toolbarUi) toolbarUi->begin();
+        discardOverlayPage();
+      }
       requestUpdate();
       return;
     }

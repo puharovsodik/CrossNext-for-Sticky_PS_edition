@@ -525,6 +525,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                             StrId::STR_CAT_READER),
         SettingInfo::Toggle(StrId::STR_XTC_INVERT_DIRECTION, &CrossPointSettings::xtcInvertPageDirection,
                             "xtcInvertPageDirection", StrId::STR_CAT_CONTROLS),
+        // Set from the XTC reader's More tab only.
+        SettingInfo::Toggle(StrId::STR_XTC_DOUBLE_TAP_ZOOM, &CrossPointSettings::xtcDoubleTapZoom, "xtcDoubleTapZoom"),
         // Persisted under the legacy "tapForReaderMenu" key: old saves map
         // 0 = Off, 1 = Tap.
         SettingInfo::Enum(StrId::STR_SHOW_READER_MENU, &CrossPointSettings::showReaderMenu,

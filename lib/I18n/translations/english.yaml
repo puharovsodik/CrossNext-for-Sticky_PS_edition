@@ -4386,6 +4386,7 @@ STR_HOME_SHORTCUT_TARGET: "Shortcut destination"
 
 STR_XTC_INVERT_DIRECTION: "Invert XTC/XTCH direction"
 STR_XTC_INVERT_DIRECTION_HELP: "Swap page swipes and touch zones for XTC/XTCH."
+STR_XTC_DOUBLE_TAP_ZOOM: "Double-tap zoom"
 STR_FLASH_TEXT_SETTINGS: "Flashcard text"
 STR_FLASH_QUESTION_SIZE: "Question size"
 STR_FLASH_ANSWER_SIZE: "Answer size"
